@@ -35,6 +35,20 @@ from .data_service import REP_IDS
 
 MODEL_NAME = "gpt-4o-mini"
 
+PROFILE_FIELDS = (
+    "prospect_id",
+    "name",
+    "email",
+    "annual_revenue",
+    "engagement_history",
+    "account_details",
+    "tech_stack",
+    "enrichment_source",
+    "disqualified",
+)
+CONTACT_FIELDS = ("prospect_id", "name", "email", "disqualified")
+SCORING_PROFILE_FIELDS = tuple(field for field in PROFILE_FIELDS if field != "email")
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -52,17 +66,21 @@ def build_prospect_profile(prospect_id: str) -> dict:
     "Assemble a full prospect profile (engagement history, account details, tech stack) and store it. Returns the profile and a found flag."
     existing = data_service.get_profile_from_db(prospect_id)["prospect_profile"]
     if existing is not None:
-        return {"prospect_profile": existing, "found": True}
+        profile = {field: existing[field] for field in PROFILE_FIELDS if field in existing}
+        data_service.save_profile_to_db(prospect_id, profile)
+        return {"prospect_profile": profile, "found": True}
     rec = data_service.get_prospect_record(prospect_id)
     if rec is None:
         return {"prospect_profile": None, "found": False}
     built = {
+        field: rec[field] for field in PROFILE_FIELDS if field in rec
+    }
+    built.update({
         "prospect_id": prospect_id,
-        **rec,
         "engagement_history": data_service.fetch_engagement_history(prospect_id),
         "account_details": data_service.fetch_account_details(prospect_id),
         "tech_stack": data_service.fetch_tech_stack(prospect_id),
-    }
+    })
     data_service.save_profile_to_db(prospect_id, built)
     return {"prospect_profile": built, "found": True}
 
@@ -109,6 +127,11 @@ def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict
         return {"score": None, "error": "Cannot score without a valid offering."}
     # Score against the prospect's saved tech stack of record.
     pid = prospect_profile.get("prospect_id")
+    prospect_profile = {
+        field: prospect_profile[field]
+        for field in SCORING_PROFILE_FIELDS
+        if field in prospect_profile
+    }
     if pid is not None:
         prospect_profile = {**prospect_profile, "tech_stack": data_service.fetch_tech_stack(pid)}
     user = (
@@ -128,13 +151,8 @@ def get_prospect(prospect_id: str) -> dict:
     record = data_service.get_prospect_record(prospect_id)
     if record is None:
         return {"prospect": None, "found": False}
-    # Carry the contact fields through, dropping the bulky enrichment blobs the
-    # caller can pull from build_prospect_profile instead.
-    contact = {
-        "prospect_id": prospect_id,
-        **{k: v for k, v in record.items()
-           if k not in ("engagement_history", "account_details", "tech_stack")},
-    }
+    contact = {field: record[field] for field in CONTACT_FIELDS if field in record}
+    contact["prospect_id"] = prospect_id
     return {"prospect": contact, "found": True}
 
 
